@@ -3207,7 +3207,7 @@ int DumpImageInCurrentProcess(PVOID Address)
 	{
 		DebugOutput("DumpImageInCurrentProcess: Attempting to dump virtual PE image.\n");
 
-		if (!DumpProcess(GetCurrentProcess(), Address, 0, FALSE))
+		if (!DumpProcess(GetCurrentProcess(), Address, 0, TRUE))
 			DebugOutput("DumpImageInCurrentProcess: Failed to dump virtual PE image from 0x%p, dumping memory region.\n", Address);
 		else
 			RetVal = 1;

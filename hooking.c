@@ -51,6 +51,7 @@ extern ULONG_PTR base_of_dll_of_interest;
 extern BOOL BreakpointsSet;
 extern PVOID ImageBase;
 extern BOOLEAN g_dll_main_complete;
+extern int DumpFlag;
 
 void emit_rel(unsigned char *buf, unsigned char *source, unsigned char *target)
 {
@@ -244,28 +245,49 @@ void api_dispatch(hook_t *h, hook_info_t *hookinfo)
 		}
 	}
 
-	for (i = 0; i < ARRAYSIZE(g_config.dump_on_apinames); i++) {
-		if (!g_config.dump_on_apinames[i])
-			break;
-		if (!stricmp(h->funcname, g_config.dump_on_apinames[i])) {
-			DebugOutput("Dump-on-API: %s call detected in thread %d, main_caller_retaddr 0x%p.\n", g_config.dump_on_apinames[i], GetCurrentThreadId(), main_caller_retaddr);
-			if (main_caller_retaddr) {
-				AllocationBase = GetHookCallerBase();
-				if (AllocationBase) {
-					if (g_config.dump_on_api_type)
-						CapeMetaData->DumpType = g_config.dump_on_api_type;
-					if (DumpRegion(AllocationBase))
-						DebugOutput("Dump-on-API: Dumped memory region at 0x%p due to %s call.\n", AllocationBase, h->funcname);
-					else
-						DebugOutput("Dump-on-API: Failed to dump memory region at 0x%p due to %s call.\n", AllocationBase, h->funcname);
-				}
+	// for (i = 0; i < ARRAYSIZE(g_config.dump_on_apinames); i++) {
+	// 	if (!g_config.dump_on_apinames[i])
+	// 		break;
+	// 	if (!stricmp(h->funcname, g_config.dump_on_apinames[i])) {
+	// 		DebugOutput("Dump-on-API: %s call detected in thread %d, main_caller_retaddr 0x%p.\n", g_config.dump_on_apinames[i], GetCurrentThreadId(), main_caller_retaddr);
+	// 		if (main_caller_retaddr) {
+	// 			AllocationBase = GetHookCallerBase();
+	// 			if (AllocationBase) {
+	// 				if (g_config.dump_on_api_type)
+	// 					CapeMetaData->DumpType = g_config.dump_on_api_type;
+	// 				if (DumpRegion(AllocationBase))
+	// 					DebugOutput("Dump-on-API: Dumped memory region at 0x%p due to %s call.\n", AllocationBase, h->funcname);
+	// 				else
+	// 					DebugOutput("Dump-on-API: Failed to dump memory region at 0x%p due to %s call.\n", AllocationBase, h->funcname);
+	// 			}
+	// 			else
+	// 				DebugOutput("Dump-on-API: Failed to obtain current module base address.\n");
+	// 		}
+	// 		else
+	// 			DebugOutput("Dump-on-API: No valid return address.\n");
+	// 		break;
+	// 	}
+	// }
+	
+	if (DumpFlag) {
+		DumpFlag = 0;
+		DebugOutput("Dump-on-API: %s call detected in thread %d, main_caller_retaddr 0x%p.\n", g_config.dump_on_apinames[0], GetCurrentThreadId(), main_caller_retaddr);
+		if (main_caller_retaddr) {
+			AllocationBase = GetHookCallerBase();
+			if (AllocationBase) {
+				if (g_config.dump_on_api_type)
+					CapeMetaData->DumpType = g_config.dump_on_api_type;
+				if (DumpRegion(AllocationBase))
+					DebugOutput("Dump-on-API: Dumped memory region at 0x%p due to %s call.\n", AllocationBase, h->funcname);
 				else
-					DebugOutput("Dump-on-API: Failed to obtain current module base address.\n");
+					DebugOutput("Dump-on-API: Failed to dump memory region at 0x%p due to %s call.\n", AllocationBase, h->funcname);
 			}
 			else
-				DebugOutput("Dump-on-API: No valid return address.\n");
-			break;
+				DebugOutput("Dump-on-API: Failed to obtain current module base address.\n");
 		}
+		else
+			DebugOutput("Dump-on-API: No valid return address.\n");
+		
 	}
 
 
