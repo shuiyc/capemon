@@ -1047,7 +1047,6 @@ HOOKDEF(HMODULE, WINAPI, LoadLibraryExW,
 	return ret;
 }
 
-// it's not safe to call pipe() in this hook until we replace all uses of snprintf in pipe()
 HOOKDEF(NTSTATUS, WINAPI, NtAllocateVirtualMemory,
 	__in	 HANDLE ProcessHandle,
 	__inout  PVOID *BaseAddress,
@@ -1110,10 +1109,28 @@ HOOKDEF(NTSTATUS, WINAPI, NtReadVirtualMemory,
 	ENSURE_SIZET(NumberOfBytesRead);
 
 	ret = Old_NtReadVirtualMemory(ProcessHandle, BaseAddress, Buffer, NumberOfBytesToRead, NumberOfBytesRead);
+	DWORD pid = pid_from_process_handle(ProcessHandle);
 
-	LOQ_ntstatus("process", "pphB", "ProcessHandle", ProcessHandle, "BaseAddress", BaseAddress, "Size", NumberOfBytesToRead, "Buffer", NumberOfBytesRead, Buffer);
-	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtReadVirtualMemory", hookinfo);
+	if (pid != GetCurrentProcessId()) {
+		LOQ_ntstatus(
+			"process", "piphB",
+			"ProcessHandle", ProcessHandle,
+			"ProcessId", pid,
+			"BaseAddress", BaseAddress,
+			"Size", NumberOfBytesToRead,
+			"Buffer", NumberOfBytesRead, Buffer
+		);
+	}
+	else {
+		LOQ_ntstatus(
+			"process", "piphB",
+			"ProcessHandle", ProcessHandle,
+			"BaseAddress", BaseAddress,
+			"Size", NumberOfBytesToRead,
+			"Buffer", NumberOfBytesRead, Buffer
+		);
+	}
+
 	return ret;
 }
 
@@ -1128,10 +1145,30 @@ HOOKDEF(BOOL, WINAPI, ReadProcessMemory,
 	ENSURE_SIZET(lpNumberOfBytesRead);
 
 	ret = Old_ReadProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesRead);
+	DWORD pid = pid_from_process_handle(hProcess);
 
-	LOQ_bool("process", "pphB", "ProcessHandle", hProcess, "BaseAddress", lpBaseAddress, "Size", nSize, "Buffer", lpNumberOfBytesRead, lpBuffer);
-	hook_info_t *hookinfo = hook_info();
-	DumpOnce("ReadProcessMemory", hookinfo);
+
+	if (pid != GetCurrentProcessId()) {
+		LOQ_bool(
+			"process", "pphB",
+			"ProcessHandle", hProcess,
+			"BaseAddress", lpBaseAddress,
+			"Size", nSize,
+			"Buffer", lpNumberOfBytesRead, lpBuffer,
+			"ProcessId", pid
+		);
+	}
+	else {
+		LOQ_bool(
+			"process", "pphB",
+			"ProcessHandle", hProcess,
+			"BaseAddress", lpBaseAddress,
+			"Size", nSize,
+			"Buffer", lpNumberOfBytesRead, lpBuffer,
+			"ProcessId", pid
+		);
+	}
+
 	return ret;
 }
 
@@ -1151,12 +1188,27 @@ HOOKDEF(NTSTATUS, WINAPI, NtWriteVirtualMemory,
 
 	pid = pid_from_process_handle(ProcessHandle);
 
-	LOQ_ntstatus("process", "ppBhs",
-		"ProcessHandle", ProcessHandle,
-		"BaseAddress", BaseAddress,
-		"Buffer", NumberOfBytesWritten, Buffer,
-		"BufferLength", is_valid_address_range((ULONG_PTR)NumberOfBytesWritten, 4) ? *NumberOfBytesWritten : 0,
-		"StackPivoted", is_stack_pivoted() ? "yes" : "no");
+	if (pid != GetCurrentProcessId()) {
+		LOQ_ntstatus(
+			"process", "pipBhs",
+			"ProcessHandle", ProcessHandle,
+			"ProcessId", pid,
+			"BaseAddress", BaseAddress,
+			"Buffer", NumberOfBytesWritten, Buffer,
+			"BufferLength", is_valid_address_range((ULONG_PTR)NumberOfBytesWritten, 4) ? *NumberOfBytesWritten : 0,
+			"StackPivoted", is_stack_pivoted() ? "yes" : "no"
+		);
+	}
+	else {
+		LOQ_ntstatus(
+			"process", "pipBhs",
+			"ProcessHandle", ProcessHandle,
+			"BaseAddress", BaseAddress,
+			"Buffer", NumberOfBytesWritten, Buffer,
+			"BufferLength", is_valid_address_range((ULONG_PTR)NumberOfBytesWritten, 4) ? *NumberOfBytesWritten : 0,
+			"StackPivoted", is_stack_pivoted() ? "yes" : "no"
+		);
+	}
 
 	if (pid != GetCurrentProcessId() && NT_SUCCESS(ret)) {
 		if (g_config.injection)
@@ -1185,8 +1237,27 @@ HOOKDEF(BOOL, WINAPI, WriteProcessMemory,
 
 	pid = pid_from_process_handle(hProcess);
 
-	LOQ_bool("process", "ppBhs", "ProcessHandle", hProcess, "BaseAddress", lpBaseAddress,
-		"Buffer", lpNumberOfBytesWritten, lpBuffer, "BufferLength", *lpNumberOfBytesWritten, "StackPivoted", is_stack_pivoted() ? "yes" : "no");
+	if (pid != GetCurrentProcessId()) {
+		LOQ_bool(
+			"process", "pipBhs",
+			"ProcessHandle", hProcess,
+			"ProcessId", pid,
+			"BaseAddress", lpBaseAddress,
+			"Buffer", lpNumberOfBytesWritten, lpBuffer,
+			"BufferLength", *lpNumberOfBytesWritten,
+			"StackPivoted", is_stack_pivoted() ? "yes" : "no"
+		);
+	}
+	else {
+		LOQ_bool(
+			"process", "ppBhs",
+			"ProcessHandle", hProcess,
+			"BaseAddress", lpBaseAddress,
+			"Buffer", lpNumberOfBytesWritten, lpBuffer,
+			"BufferLength", *lpNumberOfBytesWritten,
+			"StackPivoted", is_stack_pivoted() ? "yes" : "no"
+		);
+	}
 
 	if (pid != GetCurrentProcessId() && ret) {
 		if (g_config.injection)
@@ -1417,7 +1488,6 @@ HOOKDEF(BOOL, WINAPI, VirtualProtectEx,
 	return ret;
 }
 
-// it's not safe to call pipe() in this hook until we replace all uses of snprintf in pipe()
 HOOKDEF(NTSTATUS, WINAPI, NtFreeVirtualMemory,
 	IN	  HANDLE ProcessHandle,
 	IN	  PVOID *BaseAddress,

@@ -51,6 +51,31 @@ char InternalYara[] =
 	"rule LdrpCallInitRoutine"
 	"{strings:$function = {55 8B EC 56 57 53 8B F4 [0-2] FF 75 14 FF 75 10 FF 75 0C FF 55 08 8B E6 5B 5F 5E 5D C2 10 00}"
 	"condition:uint16(0) == 0x5a4d and any of them}"
+	"rule WMI_ExecQuery"
+	"{strings:$function = {4C 8B DC 56 57 41 54 41 56 41 57 48 83 EC 60 49 C7 43 B8 FE FF FF FF 49 89 5B 10 49 89 6B 18 45 8B E1 4D 8B F0 4C 8B F9 48 8B 41 08 48 83 78 20 00 0F 84}"
+	"condition:uint16(0) == 0x5a4d and any of them}"
+	"rule WMI_ExecMethod"
+	"{strings:$function = {48 8B C4 56 57 41 54 41 56 41 57 48 83 EC 70 48 C7 40 B8 FE FF FF FF 48 89 58 10 48 89 68 18 45 8B E1 4D 8B F0 48 8B EA 4C 8B F9 48 8B 41 08 48 83 78 20 00 75 0A B8 08 01 01 80 E9}"
+	"condition:uint16(0) == 0x5a4d and any of them}"
+	"rule WMI_ExecQueryAsync"
+	"{strings:$function = {4C 8B DC 56 57 41 54 41 56 41 57 48 83 EC 60 49 C7 43 B8 FE FF FF FF 49 89 5B 10 49 89 6B 18 45 8B E1 4D 8B F0 48 8B E9 48 8B 41 08 48 83 78 20 00 0F 84 [4] 49 83 63 08 00 4D 8D 43 08 E8}"
+	"condition:uint16(0) == 0x5a4d and any of them}"
+	"rule WMI_ExecMethodAsync"
+	"{strings:$function = {48 8B C4 57 41 54 41 55 41 56 41 57 48 83 EC 60 48 C7 40 B8 FE FF FF FF 48 89 58 10 48 89 68 18 48 89 70 20 45 8B E9 4D 8B F8 4C 8B F2 48 8B E9 48 8B 41 08 48 83 78 20 00 75 0A B8 08 01 01 80 E9}"
+	"condition:uint16(0) == 0x5a4d and any of them}"
+	"rule WMI_GetObject"
+	"{strings:$function = {4C 8B DC 56 57 41 54 41 56 41 57 48 83 EC 50 49 C7 43 ?? FE FF FF FF 49 89 5B 10 49 89 6B 18 4D 8B F9 45 8B E0 48 8B EA 4C 8B F1 48 8B 41 08 48 83 78 20 00 0F 84 12 AB 02 00 49 83 63 08 00 4D 8D 43 08 E8}"
+	"condition:uint16(0) == 0x5a4d and any of them}"
+	"rule WMI_GetObjectAsync"
+	"{strings:$function = {48 8B C4 56 57 41 54 41 56 41 57 48 83 EC 40 48 C7 40 C8 FE FF FF FF 48 89 58 10 48 89 68 18 4D 8B F9 45 8B E0 48 8B EA 48 8B F1 48 8B 41 08 48 83 78 20 00 75 0A B8 08 01 01 80 E9}"
+	"condition:uint16(0) == 0x5a4d and any of them}"
+	"rule vDbgPrintExWithPrefixInternal"
+#ifdef _WIN64
+	"{strings:$function = {40 55 53 56 41 54 41 55 41 56 41 57 48 81 EC 20 01 00 00 48 8D 6C 24 20 48 8B 05 [4] 48 33 C5 48 89 85 ?? 00 00 00 4C 89 4D ?? 44 89 45 ?? 44 8B E2 89 55 ?? 48 8B D1 48 89 4D ?? 48 8B 85}"
+#else
+	"{strings:$function = {68 90 00 00 00 68 [4] E8 [4] 89 95 [4] 89 8D [4] 8B 45 ?? 89 85 [4] 8B 45 ?? 89 85 [4] 64 A1 18 00 00 00 89 45 ?? 83 FA FF 0F 84}"
+#endif
+	"condition:uint16(0) == 0x5a4d and any of them}"
 	"rule capemon"
 	"{strings:$hash = {d3 b9 46 1d 9a 14 bc 44 a1 61 c3 47 6a 0e 35 90 00 2c 28 81 dc a0 36 dc 2c 92 0c 7c b6 84 39 59}"
 	"condition:all of them}";
@@ -90,21 +115,25 @@ void ScannerError(int Error)
 	}
 }
 
-BOOL ParseOptionLine(char* Line, char* Identifier, YR_MATCH* Match)
+void ParseOptionLine(char* Line, char* Identifier, YR_MATCH* Match, void* user_data)
 {
 	char *Value, *Key, *p, *q, *r, c = 0;
-	unsigned int ValueLength;
-	int delta=0;
+	ULONG_PTR delta=0;
+	SIZE_T ValueLength = 0;
+
 	if (!Line || !Identifier)
-		return FALSE;
+		return;
+
 	p = strchr(Line, '$');
 	if (!p)
-		return FALSE;
+		return;
+
 	p = strchr(Line, '=');
 	if (!p)
-		return FALSE;
+		return;
+
 	r = strchr(p, ':');
-	if (r)
+	if (r && *(r + 1) == '$')
 		Value = r + 1;
 	else
 		Value = p + 1;
@@ -127,12 +156,12 @@ BOOL ParseOptionLine(char* Line, char* Identifier, YR_MATCH* Match)
 	}
 	if (q)
 	{
-		ValueLength = (unsigned int)(DWORD_PTR)(q-(DWORD_PTR)Value);
+		ValueLength = (SIZE_T)(DWORD_PTR)(q-(DWORD_PTR)Value);
 		if (*(q-1) == '*')
 			ValueLength--;
 	}
 	else
-		ValueLength = (unsigned int)strlen(Value);
+		ValueLength = (SIZE_T)strlen(Value);
 
 	if (*(Value+ValueLength-1) == '*')
 	{
@@ -140,28 +169,44 @@ BOOL ParseOptionLine(char* Line, char* Identifier, YR_MATCH* Match)
 		delta += Match->match_length - 1;
 	}
 
-	if (strncmp(Value, Identifier, ValueLength))
-		return FALSE;
+	SIZE_T IdentifierLength = strlen(Identifier);
+	if (strncmp(Value, Identifier, IdentifierLength < ValueLength ? IdentifierLength : ValueLength))
+		return;
 
 	Key = Line;
-	if (r) {
+	if (r && *(r + 1) == '$')
+	{
 		c = *r;
 		*r = 0;
 	}
-	else {
+	else
+	{
 		c = *p;
 		*p = 0;
 	}
+
+	if (_strnicmp(Line, "bp", 2) && strncmp(Line, "br", 2) && strncmp(Line, "sysbp", 5))
+		delta += (ULONG_PTR)user_data;
+
 	memset(NewLine, 0, sizeof(NewLine));
-	sprintf(NewLine, "%s%c0x%p\0", Key, c, (PUCHAR)Match->offset+delta);
 	if (r)
+		sprintf(NewLine, "%s%c0x%p%s\0", Key, c, (PUCHAR)Match->offset+delta, r);
+	else
+		sprintf(NewLine, "%s%c0x%p\0", Key, c, (PUCHAR)Match->offset+delta);
+
+	if (r && *(r + 1) == '$')
 		*r = c;
 	else
 		*p = c;
-	p = strchr(NewLine, '$');
-	if (p)
-		return FALSE;
-	return TRUE;
+
+#ifdef DEBUG_COMMENTS
+	DebugOutput("ParseOptionLine: %s", NewLine);
+#endif
+
+	if (!strchr(NewLine, '$'))
+		parse_config_line(NewLine);
+
+	return;
 }
 
 int YaraCallback(YR_SCAN_CONTEXT* context, int message, void* message_data, void* user_data)
@@ -195,27 +240,23 @@ int YaraCallback(YR_SCAN_CONTEXT* context, int message, void* message_data, void
 						char *p = strchr(OptionLine, ',');
 						if (p)
 							*p = 0;
-						yr_rule_strings_foreach(Rule, String)
+						if (!strchr(OptionLine, '$'))
+							parse_config_line(OptionLine);
+						else
 						{
-							yr_string_matches_foreach(context, String, Match)
+							yr_rule_strings_foreach(Rule, String)
 							{
-#ifdef DEBUG_COMMENTS
-								DebugOutput("YaraScan match: %s, %s (0x%x)", OptionLine, String->identifier, Match->offset);
-#endif
-								if (ParseOptionLine(OptionLine, (char*)String->identifier, Match))
+								yr_string_matches_foreach(context, String, Match)
 								{
 #ifdef DEBUG_COMMENTS
-									DebugOutput("YaraScan: NewLine %s", NewLine);
+									DebugOutput("YaraScan match: %s, %s (0x%x)", OptionLine, String->identifier, Match->offset);
 #endif
-									parse_config_line(NewLine);
-									SetBreakpoints = TRUE;
+									ParseOptionLine(OptionLine, (char*)String->identifier, Match, user_data);
 								}
-								else if (!strchr(OptionLine, '$') && _strnicmp(OptionLine, "bp", 2) || strncmp(OptionLine, "br", 2))
-									SetBreakpoints = TRUE;
-
 							}
 						}
-
+						if (!_strnicmp(OptionLine, "bp", 2) || !strncmp(OptionLine, "br", 2) || !strncmp(OptionLine, "sysbp", 5))
+							SetBreakpoints = TRUE;
 						if (!_stricmp("dump", OptionLine))
 							DoDumpRegion = TRUE;
 						if (!_stricmp("clear", OptionLine))
@@ -234,8 +275,6 @@ int YaraCallback(YR_SCAN_CONTEXT* context, int message, void* message_data, void
 							memset(Action2, 0, MAX_PATH);
 							memset(Action3, 0, MAX_PATH);
 						}
-						if (!strchr(OptionLine, '$'))
-							parse_config_line(OptionLine);
 						if (p)
 						{
 							*p = ',';
@@ -361,7 +400,7 @@ PVOID GetAddressByYara(HMODULE ModuleBase, PCHAR FunctionName)
 		return NULL;
 
 #ifdef DEBUG_COMMENTS
-	DebugOutput("GetAddressByYara: %s found at 0x%x", FunctionName, (ULONG_PTR)ModuleBase + (ULONG_PTR)AddressInfo.Address);
+	DebugOutput("GetAddressByYara: %s found at 0x%p", FunctionName, (ULONG_PTR)ModuleBase + (ULONG_PTR)AddressInfo.Address);
 #endif
 
 	return (PVOID)((ULONG_PTR)ModuleBase + (ULONG_PTR)AddressInfo.Address);

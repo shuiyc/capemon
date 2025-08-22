@@ -45,7 +45,6 @@ extern char *convert_address_to_dll_name_and_offset(ULONG_PTR addr, unsigned int
 extern BOOL is_in_dll_range(ULONG_PTR addr);
 extern DWORD_PTR FileOffsetToVA(DWORD_PTR ModuleBase, DWORD_PTR dwOffset);
 extern DWORD_PTR GetEntryPointVA(DWORD_PTR ModuleBase);
-extern PCHAR ScyllaGetExportNameByAddress(PVOID Address, PCHAR* ModuleName);
 extern ULONG_PTR g_our_dll_base;
 extern BOOL inside_hook(LPVOID Address);
 extern void loq(int index, const char *category, const char *name,
@@ -207,7 +206,7 @@ SIZE_T StrTestW(PWCHAR StrCandidate, PWCHAR OutputBuffer, SIZE_T BufferSize)
 
 void StringCheck(PVOID PossibleString)
 {
-	PCHAR ExportName = ScyllaGetExportNameByAddress(PossibleString, NULL);
+	PCHAR ExportName = GetExportNameByAddress(PossibleString);
 	if (ExportName)
 	{
 		DebuggerOutput(" %s ", ExportName);
@@ -273,8 +272,6 @@ void DoOutputString(PVOID PossibleString)
 			StringsOutput("%.256ws...", (PWCHAR)OutputBufferW);
 		else if (Size > 1)
 			StringsOutput("%.256ws", (PWCHAR)OutputBufferW);
-		else
-			StringsOutput("");
 	}
 }
 
@@ -588,6 +585,36 @@ PVOID GetTarget(PCONTEXT Context, _DecodedInst DecodedInstruction)
 	return Target;
 }
 
+void OutputFlagChanges(DWORD OldFlags, DWORD NewFlags)
+{
+	if (OldFlags == NewFlags) return;
+
+	char FlagChanges[32] = {0};
+	int pos = 0;
+
+	#define CHECK_FLAG(flag, ch) \
+		if ((OldFlags & flag) != (NewFlags & flag)) \
+			FlagChanges[pos++] = (NewFlags & flag) ? toupper(ch) : tolower(ch)
+
+	CHECK_FLAG(FL_CF, 'c');  // Carry: C/c
+	CHECK_FLAG(FL_PF, 'p');  // Parity: P/p
+	CHECK_FLAG(FL_AF, 'a');  // Aux: A/a
+	CHECK_FLAG(FL_ZF, 'z');  // Zero: Z/z
+	CHECK_FLAG(FL_SF, 's');  // Sign: S/s
+	CHECK_FLAG(FL_TF, 't');  // Trap: T/t
+	CHECK_FLAG(FL_IF, 'i');  // Interrupt: I/i
+	CHECK_FLAG(FL_DF, 'd');  // Direction: D/d
+	CHECK_FLAG(FL_OF, 'o');  // Overflow: O/o
+
+	#undef CHECK_FLAG
+
+	if (pos > 0)
+	{
+		FlagChanges[pos] = '\0';
+		DebuggerOutput(" %s", FlagChanges);
+	}
+}
+
 OutputRegisterChanges(PCONTEXT Context)
 {
 #ifdef _WIN64
@@ -771,6 +798,9 @@ OutputRegisterChanges(PCONTEXT Context)
 		}
 	}
 #endif
+
+	OutputFlagChanges(LastContext.EFlags, Context->EFlags);
+
 	if (g_config.trace_times)
 	{
 		FILETIME CurrentTime;
@@ -1601,6 +1631,10 @@ void ActionDispatcher(struct _EXCEPTION_POINTERS* ExceptionInfo, _DecodedInst De
 		DumpAddress = 0;
 		DumpSize = 0;
 	}
+	else if (!stricmp(Action, "DumpStrings"))
+	{
+		DumpStrings();
+	}
 	else if (!stricmp(Action, "Step2OEP"))
 	{
 		SetSingleStepMode(ExceptionInfo->ContextRecord, ProcessOEP);
@@ -1773,7 +1807,7 @@ void InstructionHandler(struct _EXCEPTION_POINTERS* ExceptionInfo, _DecodedInst 
 		}
 		else if (CallTarget && !ExportName)
 		{
-			ExportName = ScyllaGetExportNameByAddress(CallTarget, NULL);
+			ExportName = GetExportNameByAddress(CallTarget);
 
 			if (!ExportName && (!FilterTrace || g_config.trace_all))
 				TraceOutputFuncAddress(CIP, DecodedInstruction, CallTarget);
@@ -1807,6 +1841,13 @@ void InstructionHandler(struct _EXCEPTION_POINTERS* ExceptionInfo, _DecodedInst 
 			}
 		}
 
+		if (g_config.stepmode == 1 && *(PBYTE)CIP == 0xE8)
+		{
+			LONG offset = *(LONG*)((PBYTE)CIP + 1);
+			if (offset > -0x100 && offset < 0x100)
+				ReturnAddress = NULL;
+		}
+
 		if (ReturnAddress && (unsigned int)abs(TraceDepthCount) >= TraceDepthLimit)
 			*StepOver = TRUE;
 		else
@@ -1830,7 +1871,7 @@ void InstructionHandler(struct _EXCEPTION_POINTERS* ExceptionInfo, _DecodedInst 
 		}
 		else
 		{
-			ExportName = ScyllaGetExportNameByAddress(JumpTarget, NULL);
+			ExportName = GetExportNameByAddress(JumpTarget);
 
 			if (ExportName)
 			{
@@ -1984,7 +2025,7 @@ void InstructionHandler(struct _EXCEPTION_POINTERS* ExceptionInfo, _DecodedInst 
 #endif
 		SkipInstruction(ExceptionInfo->ContextRecord);
 		if (lookup_get(&SoftBPs, (ULONG_PTR)CIP, 0))
-			PatchByte(CIP, 0xCC);
+			PatchBytes(CIP, "CC");
 	}
 	else if (!strcmp(DecodedInstruction.mnemonic.p, "RET"))
 	{
@@ -2094,18 +2135,7 @@ BOOL Trace(struct _EXCEPTION_POINTERS* ExceptionInfo)
 		DebuggerOutput("\n");
 	}
 
-	PCHAR FunctionName = NULL;
-	__try
-	{
-		FunctionName = ScyllaGetExportNameByAddress(CIP, NULL);
-	}
-	__except(EXCEPTION_EXECUTE_HANDLER)
-	{
-		DebugOutput("Trace: Error dereferencing instruction pointer 0x%p.\n", CIP);
-		FunctionName = NULL;
-	}
 	ModuleName = convert_address_to_dll_name_and_offset((ULONG_PTR)CIP, &DllRVA);
-
 	if (ModuleName)
 	{
 		if (CIP == (PVOID)((PCHAR)_KiUserExceptionDispatcher+1))
@@ -2119,6 +2149,7 @@ BOOL Trace(struct _EXCEPTION_POINTERS* ExceptionInfo)
 			PVOID ImageBase = (PVOID)((PUCHAR)CIP - DllRVA);
 			if (FilterTrace)
 				DebuggerOutput("\n");
+			PCHAR FunctionName = GetExportNameByAddress(CIP);
 			if (FunctionName)
 			{
 				DebuggerOutput("Break at 0x%p in %s::%s (RVA 0x%x, thread %d, Stack 0x%p-0x%p, ImageBase 0x%p)\n", CIP, ModuleName, FunctionName, DllRVA, GetCurrentThreadId(), get_stack_bottom(), get_stack_top(), ImageBase);
@@ -2326,19 +2357,10 @@ BOOL BreakpointCallback(PBREAKPOINTINFO pBreakpointInfo, struct _EXCEPTION_POINT
 	{
 		if (!PreviousModuleName || strncmp(ModuleName, PreviousModuleName, strlen(ModuleName)))
 		{
-			PCHAR FunctionName;
-			PVOID ImageBase = (PVOID)((PUCHAR)CIP - DllRVA);
-
-			__try
-			{
-				FunctionName = ScyllaGetExportNameByAddress(CIP, NULL);
-			}
-			__except(EXCEPTION_EXECUTE_HANDLER)
-			{
-				DebugOutput("BreakpointCallback: Error dereferencing instruction pointer 0x%p.\n", CIP);
-			}
 			if (FilterTrace)
 				DebuggerOutput("\n");
+			PVOID ImageBase = (PVOID)((PUCHAR)CIP - DllRVA);
+			PCHAR FunctionName = GetExportNameByAddress(CIP);
 			if (FunctionName)
 			{
 				DebuggerOutput("Break at 0x%p in %s::%s (RVA 0x%x, thread %d, Stack 0x%p-0x%p, ImageBase 0x%p)\n", CIP, ModuleName, FunctionName, DllRVA, GetCurrentThreadId(), get_stack_bottom(), get_stack_top(), ImageBase);
@@ -2408,8 +2430,6 @@ BOOL BreakpointCallback(PBREAKPOINTINFO pBreakpointInfo, struct _EXCEPTION_POINT
 
 	if (pBreakpointInfo->Register == 2 && strlen(Action2))
 		ActionDispatcher(ExceptionInfo, DecodedInstruction, Action2);
-	else if (pBreakpointInfo->Register == 2)
-		DebuggerOutput("Action2 empty! %s\n", Action2);
 
 	if (pBreakpointInfo->Register == 3 && strlen(Action3))
 		ActionDispatcher(ExceptionInfo, DecodedInstruction, Action3);
@@ -2572,6 +2592,7 @@ BOOL SoftwareBreakpointCallback(struct _EXCEPTION_POINTERS* ExceptionInfo)
 BOOL BreakOnReturnCallback(PBREAKPOINTINFO pBreakpointInfo, struct _EXCEPTION_POINTERS* ExceptionInfo)
 {
 	PVOID CIP;
+	int Register;
 	unsigned int DllRVA;
 
 	BreakpointsHit = TRUE;
@@ -2588,22 +2609,14 @@ BOOL BreakOnReturnCallback(PBREAKPOINTINFO pBreakpointInfo, struct _EXCEPTION_PO
 
 	if (ModuleName)
 	{
-		PCHAR FunctionName;
-		__try
-		{
-			FunctionName = ScyllaGetExportNameByAddress(CIP, NULL);
-		}
-		__except(EXCEPTION_EXECUTE_HANDLER)
-		{
-			DebugOutput("BreakOnReturnCallback: Error dereferencing instruction pointer 0x%p.\n", CIP);
-		}
+		PCHAR FunctionName = GetExportNameByAddress(CIP);
 		if (FunctionName)
 			DebuggerOutput("\nBreak at 0x%p in %s::%s (RVA 0x%x, thread %d), releasing until return address 0x%p\n", CIP, ModuleName, FunctionName, DllRVA, GetCurrentThreadId(), ReturnAddress);
 		else
 			DebuggerOutput("\nBreak at 0x%p in %s (RVA 0x%x, thread %d), releasing until return address 0x%p\n", CIP, ModuleName, DllRVA, GetCurrentThreadId(), ReturnAddress);
 	}
 
-	if (!ContextSetNextAvailableBreakpoint(ExceptionInfo->ContextRecord, &StepOverRegister, 0, (BYTE*)ReturnAddress, BP_EXEC, 1, BreakpointCallback))
+	if (!ContextSetNextAvailableBreakpoint(ExceptionInfo->ContextRecord, &Register, 0, (BYTE*)ReturnAddress, BP_EXEC, 1, BreakpointCallback))
 		DebugOutput("BreakOnReturnCallback: Failed to set breakpoint on return address at 0x%p.\n", ReturnAddress);
 
 	ReturnAddress = NULL;
