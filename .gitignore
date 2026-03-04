@@ -18,3 +18,4 @@ tests/logging-test.*
 *.opendb
 *.VC.db
 .vs/*
+.vscode/settings.json

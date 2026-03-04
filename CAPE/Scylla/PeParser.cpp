@@ -1553,6 +1553,8 @@ int PeParser::convertRVAToOffsetVectorIndex(DWORD_PTR dwRVA)
 {
 	for (WORD i = 0; i < getNumberOfSections(); i++)
 	{
+		//DebugOutput("imageBaseAddress: 0x%p\n", moduleBaseAddress);
+		//DebugOutput("listPeSection[i].sectionHeader.VirtualAddress: 0x%x, listPeSection[i].sectionHeader.Misc.VirtualSize 0x%x, dwRVA 0x%p, returning index %d\n", listPeSection[i].sectionHeader.VirtualAddress, listPeSection[i].sectionHeader.Misc.VirtualSize, dwRVA, i);
 		if ((listPeSection[i].sectionHeader.VirtualAddress <= dwRVA) && ((listPeSection[i].sectionHeader.VirtualAddress + listPeSection[i].sectionHeader.Misc.VirtualSize) > dwRVA))
 		{
 			return i;

@@ -27,6 +27,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 // File Hooks
 //
 
+HOOKDEF(FARPROC, WINAPI, GetProcAddress,
+    __in HMODULE hModule,
+    __in LPCSTR lpProcName
+);
+
 HOOKDEF(NTSTATUS, WINAPI, NtQueryAttributesFile,
 	__in   POBJECT_ATTRIBUTES ObjectAttributes,
 	__out  PFILE_BASIC_INFORMATION FileInformation

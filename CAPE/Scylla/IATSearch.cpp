@@ -35,12 +35,13 @@ bool IATSearch::searchImportAddressTableInProcess( DWORD_PTR startAddress, DWORD
 
 bool IATSearch::findIATAdvanced( DWORD_PTR startAddress, DWORD_PTR* addressIAT, DWORD* sizeIAT )
 {
+	//DebugOutput("Advanced IAT search starting at address " PRINTF_DWORD_PTR_FULL ".", startAddress);
 	BYTE *dataBuffer;
 	DWORD_PTR baseAddress;
 	SIZE_T memorySize;
 
 	findExecutableMemoryPagesByStartAddress(startAddress, &baseAddress, &memorySize);
-
+	//DebugOutput("startaddress is " PRINTF_DWORD_PTR_FULL ", baseaddress is " PRINTF_DWORD_PTR_FULL ", memorysize is %llu.", startAddress, baseAddress, (unsigned long long)memorySize);
 	if (memorySize == 0)
 		return false;
 
@@ -63,6 +64,7 @@ bool IATSearch::findIATAdvanced( DWORD_PTR startAddress, DWORD_PTR* addressIAT, 
 		findIATPointers(iatPointers);
 
 		next = (DWORD_PTR)(decomposerResult[decomposerInstructionsCount - 1].addr - baseAddress);
+		//DebugOutput("decomposerResult[decomposerInstructionsCount - 1].addr is " PRINTF_DWORD_PTR_FULL ", next is %llu.", decomposerResult[decomposerInstructionsCount - 1].addr, (unsigned long long)next);
 		next += decomposerResult[decomposerInstructionsCount - 1].size;
 		// Advance ptr and recalc offset.
 		tempBuf += next;
@@ -84,6 +86,7 @@ bool IATSearch::findIATAdvanced( DWORD_PTR startAddress, DWORD_PTR* addressIAT, 
 		return false;
 
 	*addressIAT = *(iatPointers.begin());
+	//DebugOutput("IAT Search: Found possible IAT start at " PRINTF_DWORD_PTR_FULL ".", *addressIAT);
 	*sizeIAT = (DWORD)(*(--iatPointers.end()) - *(iatPointers.begin()) + sizeof(DWORD_PTR));
 
 	//some check, more than 2 million addresses?

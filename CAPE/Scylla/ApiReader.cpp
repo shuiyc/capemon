@@ -959,6 +959,7 @@ void ApiReader::parseIAT(DWORD_PTR addressIAT, BYTE * iatBuffer, SIZE_T size)
 			if (pIATAddress[i] > minApiAddress && pIATAddress[i] < maxApiAddress)
 			{
 				apiFound = getApiByVirtualAddress(pIATAddress[i], &isSuspect);
+				//DebugOutput("apiFound %p address %p", apiFound, pIATAddress[i]);
 #ifdef DEBUG_COMMENTS
 				DebugOutput("apiFound %p address %p", apiFound, pIATAddress[i]);
 #endif
@@ -981,6 +982,7 @@ void ApiReader::parseIAT(DWORD_PTR addressIAT, BYTE * iatBuffer, SIZE_T size)
 					if (module != apiFound->module)
 					{
 						module = apiFound->module;
+						//DebugOutput("addressIAT %p, (DWORD_PTR)&pIATAddress[i] %p, iatBuffer %p", addressIAT, (DWORD_PTR)&pIATAddress[i], (DWORD_PTR)iatBuffer);
 						addFoundApiToModuleList(addressIAT + (DWORD_PTR)&pIATAddress[i] - (DWORD_PTR)iatBuffer, apiFound, true, isSuspect);
 					}
 					else
@@ -1017,6 +1019,7 @@ void ApiReader::addFoundApiToModuleList(DWORD_PTR iatAddressVA, ApiInfo * apiFou
 {
 	if (isNewModule)
 	{
+		//DebugOutput("iatAddressVA is %p, apiFound->module %s rva %p, targetImageBase %p", iatAddressVA, apiFound->module->getFilename(), apiFound->va - targetImageBase, targetImageBase);
 		addModuleToModuleList(apiFound->module->getFilename(), iatAddressVA - targetImageBase);
 	}
 	addFunctionToModuleList(apiFound, iatAddressVA, iatAddressVA - targetImageBase, apiFound->ordinal, true, isSuspect);
@@ -1027,6 +1030,7 @@ bool ApiReader::addModuleToModuleList(const CHAR * moduleName, DWORD_PTR firstTh
 	ImportModuleThunk module;
 
 	module.firstThunk = firstThunk;
+	//DebugOutput("moduleName %s firstThunk %p", moduleName, firstThunk);
 	strcpy_s(module.moduleName, moduleName);
 
 	(*moduleThunkList).insert(std::pair<DWORD_PTR,ImportModuleThunk>(firstThunk,module));

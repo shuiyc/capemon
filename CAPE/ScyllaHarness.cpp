@@ -36,9 +36,6 @@ typedef unsigned __int64 QWORD;
 
 #define PE_HEADER_LIMIT 0x200
 
-DWORD_PTR YaraEntryPoint = 0;
-ImportsHandling YaraImportsHandling;
-extern "C" int YaraDone;
 //**************************************************************************************
 void ScyllaInit(HANDLE hProcess)
 //**************************************************************************************
@@ -301,10 +298,6 @@ extern "C" int ScyllaDumpProcess(HANDLE hProcess, DWORD_PTR ModuleBase, DWORD_PT
 		goto fail;
 	}
 
-	if (!YaraEntryPoint)
-		YaraEntryPoint=entrypoint;
-	else
-		entrypoint=YaraEntryPoint;
 
 	if (FixImports)
 	{
@@ -314,6 +307,8 @@ extern "C" int ScyllaDumpProcess(HANDLE hProcess, DWORD_PTR ModuleBase, DWORD_PT
 
 		// Enumerate DLLs and imported functions
 		apiReader.readApisFromModuleList();
+		DebugOutput("modulebase is %p\n", ModuleBase);
+		
 		IAT_Found = iatSearch.searchImportAddressTableInProcess(ModuleBase, &addressIAT, &sizeIAT, FALSE);
 
 		// Try advanced search
@@ -388,17 +383,11 @@ extern "C" int ScyllaDumpProcess(HANDLE hProcess, DWORD_PTR ModuleBase, DWORD_PT
 				importRebuild.enableNewIatInSection(addressIAT, sizeIAT);
 			}
 
-			if (YaraImportsHandling.moduleList.empty())
-			YaraImportsHandling = importsHandling;
-		else
-			importsHandling = YaraImportsHandling;
 		
 			if (importRebuild.rebuildImportTable(NULL, importsHandling.moduleList, entrypoint))
 			{
 				DebugOutput("DumpProcess: Import table rebuild success.\n");
 				delete peFile;
-				if(YaraDone==0)
-					YaraDone=1;
 				return 1;
 			}
 			else
@@ -412,13 +401,9 @@ extern "C" int ScyllaDumpProcess(HANDLE hProcess, DWORD_PTR ModuleBase, DWORD_PT
 	}
 
 	delete peFile;
-	if(YaraDone==0)
-		YaraDone=1;
 	return 1;
 fail:
 	delete peFile;
-	if(YaraDone==0)
-		YaraDone=1;
 	return 0;
 }
 

@@ -71,7 +71,7 @@ bool ImportRebuilder::buildNewImportTable(std::map<DWORD_PTR, ImportModuleThunk>
 	createNewImportSection(moduleList);
 
 	importSectionIndex = listPeSection.size() - 1;
-
+	//changeIatBaseAddress(moduleList);
 	if (BuildDirectImportsJumpTable)
 	{
 		directImportsJumpTableRVA = listPeSection[importSectionIndex].sectionHeader.VirtualAddress;
@@ -242,11 +242,13 @@ DWORD ImportRebuilder::fillImportSection(std::map<DWORD_PTR, ImportModuleThunk> 
 			else
 			{
 				pThunk = (PIMAGE_THUNK_DATA)(getMemoryPointerFromRVA(importThunk->rva));
+				//DebugOutput("pThunk is %p , importThunk->rva is %p", pThunk, (DWORD_PTR)importThunk->rva);
 			}
 
 			//check wrong iat pointer
 			if (!pThunk)
 			{
+				//DebugOutput("fillImportSection :: Failed to get pThunk RVA: %X", importThunk->rva);
 #ifdef DEBUG_COMMENTS				
 				DebugOutput("fillImportSection :: Failed to get pThunk RVA: %X", importThunk->rva);
 #endif
@@ -478,14 +480,20 @@ void ImportRebuilder::changeIatBaseAddress( std::map<DWORD_PTR, ImportModuleThun
 	std::map<DWORD_PTR, ImportThunk>::iterator mapIt2;
 
 	DWORD_PTR oldIatRva = IatAddress - ProcessAccessHelp::targetImageBase;
+	//DebugOutput("pNTHeader->OptionalHeader.ImageBase is 0x%p\n", (LPVOID)getStandardImagebase());
+	//DebugOutput("Old IAT RVA: 0x%p\nIatAddress is 0x%p\nProcessAccessHelp::targetImageBase is 0x%p\n", oldIatRva, (LPVOID)IatAddress, (LPVOID)ProcessAccessHelp::targetImageBase);
 
 	for ( mapIt = moduleList.begin() ; mapIt != moduleList.end(); mapIt++ )
 	{
-		(*mapIt).second.firstThunk = (*mapIt).second.firstThunk - oldIatRva + newIatBaseAddressRVA;
+		//for now, I don't know how to rebuild the entire file based on the original code framework
+		//DebugOutput("Module %s old firstThunk RVA: 0x%p\n", (*mapIt).second.moduleName, (LPVOID)(*mapIt).second.firstThunk);
+		(*mapIt).second.firstThunk = (*mapIt).second.firstThunk - oldIatRva + newIatBaseAddressRVA ;//- (DWORD_PTR)(0x400000);
+		//DebugOutput("Module %s new firstThunk RVA: 0x%p, oldIatRva: 0x%p, newIatBaseAddressRVA: 0x%p\n", (*mapIt).second.moduleName, (LPVOID)(*mapIt).second.firstThunk, (LPVOID)oldIatRva, (LPVOID)newIatBaseAddressRVA);
 
 		for ( mapIt2 = (*mapIt).second.thunkList.begin() ; mapIt2 != (*mapIt).second.thunkList.end(); mapIt2++ )
 		{
-			(*mapIt2).second.rva = (*mapIt2).second.rva - oldIatRva + newIatBaseAddressRVA;
+			(*mapIt2).second.rva = (*mapIt2).second.rva - oldIatRva + newIatBaseAddressRVA ;//- (DWORD_PTR)(0x400000);
+			//DebugOutput("  API %s new RVA: 0x%p, oldIatRva: 0x%p, newIatBaseAddressRVA: 0x%p\n", (*mapIt2).second.name, (LPVOID)(*mapIt2).second.rva, (LPVOID)oldIatRva, (LPVOID)newIatBaseAddressRVA);
 		}
 	}
 }

@@ -49,32 +49,19 @@ extern void file_handle_terminate();
 extern int DoProcessDump();
 extern PVOID GetHookCallerBase();
 extern BOOL ProcessDumped;
-void UpdateAPIAddressesFromFile();
 
-char *LatestAPIname = NULL;
-int ReconstructionFlag = 0;
-int InitFlag = 0;
-int DumpFlag = 0;
-int YaraDone = 0;
+
 static BOOL ntdll_protect_logged;
 
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
-#ifdef _WIN64
-struct APIlatestIAT
+struct APIGuard
 {
 	const char *APIname;
-	UINT64 latestIAT;
+	int APIGuardUnpackFlag;
 };
-#else
-struct APIlatestIAT
-{
-	const char *APIname;
-	UINT32 latestIAT;
-};
-#endif
 
-struct APIlatestIAT apiArray[] = {
+struct APIGuard APIGuardArray[] = {
 	{"NtCreateUserProcess", 0},
 	{"LdrLoadDll", 0},
 	{"LdrUnloadDll", 0},
@@ -125,98 +112,74 @@ struct APIlatestIAT apiArray[] = {
 	{"system", 0}
 };
 
-int getAPIIndex(const char* APIName) {
-	int arraySize = ARRAY_SIZE(apiArray);
+int getAPIIndexNew(const char* APIName) {
+	int arraySize = ARRAY_SIZE(APIGuardArray);
 	for (int i = 0; i < arraySize; i++) {
-		if (strcmp(apiArray[i].APIname, APIName) == 0) {
+		if (strcmp(APIGuardArray[i].APIname, APIName) == 0) {
 			return i; // 找到并返回索引
 		}
 	}
 	return -1; // 未找到返回 -1
 }
 
-void DumpOnce(const char *APIname, hook_info_t *hookinfo) {
+void APIGuardUnpack(const char *APIname, hook_info_t *hookinfo){
+	//return;
+	int index = getAPIIndexNew(APIname);
+	if (index != -1) {
+		DebugOutput("APIGuardUnpack: %s APIGuardUnpackFlag is %d\n", APIGuardArray[index].APIname, APIGuardArray[index].APIGuardUnpackFlag);
+		if (APIGuardArray[index].APIGuardUnpackFlag != 1) 
+			return;
+	}
+
+	DebugOutput("APIGuardUnpack: %s test if ready to dump.\n", APIGuardArray[index].APIname);
 	DWORD_PTR minExeAddress = (DWORD_PTR)GetModuleHandle(NULL);
  	DWORD_PTR maxExeAddress = minExeAddress + (DWORD_PTR)GetAllocationSize((PVOID)minExeAddress);
-	if (hookinfo->main_caller_retaddr < minExeAddress || hookinfo->main_caller_retaddr > maxExeAddress || YaraDone == 0)
+	if (hookinfo->main_caller_retaddr < minExeAddress || hookinfo->main_caller_retaddr > maxExeAddress)
 		return;
+	DebugOutput("APIGuardUnpack: Ready to dump.\n");
 
-	if (InitFlag == 0) 
-	{
-		UpdateAPIAddressesFromFile();
-		InitFlag = 1;
-	}
-	
-	if (ReconstructionFlag == 0)
-	{
-		int APIIndex = getAPIIndex(APIname);
-		if (APIIndex != -1)
-		{
-			#ifdef _WIN64
-			DebugOutput("Before get current IAT.\n");
-			if (hookinfo) {
-				DebugOutput("Main caller return address: 0x%p\n", hookinfo->main_caller_retaddr);
-			}
-			UINT64 currentIAT = *(UINT64 *)(hookinfo->main_caller_retaddr - 4) + (UINT64)hookinfo->main_caller_retaddr - (UINT64)GetHookCallerBase();
-			DebugOutput("Current IAT is 0x%X.\n",currentIAT);
-			DebugOutput("After get current IAT.\n");
-			#else
-			DebugOutput("Before get current IAT.\n");
-			if (hookinfo) {
-				DebugOutput("Main caller return address: 0x%p\n", hookinfo->main_caller_retaddr-4);
-			}
-			UINT32 currentIAT=*(UINT32 *)(hookinfo->main_caller_retaddr - 4) - (UINT32)GetHookCallerBase();
-			DebugOutput("Current IAT is 0x%X.\n",currentIAT);
-			DebugOutput("Main caller return address: 0x%p\n", GetHookCallerBase());
-			//DebugOutput("%s Current IAT is 0x%X \n", APIname , currentIAT);
-			DebugOutput("After get current IAT.\n");
-			#endif 
-
-			if (apiArray[APIIndex].latestIAT != currentIAT)
-			{
-				ReconstructionFlag = 1;
-				g_config.dump_on_apinames[0] = apiArray[APIIndex].APIname;
-				DebugOutput("Current API is %s \n", apiArray[APIIndex].APIname);
-				DumpFlag = 1;
-				apiArray[APIIndex].latestIAT = currentIAT;
-			}
+	ULONG_PTR main_caller_retaddr;
+	PVOID AllocationBase = NULL;
+	main_caller_retaddr = hookinfo->main_caller_retaddr;
+	if (main_caller_retaddr) {
+		AllocationBase = GetHookCallerBase();
+		if (AllocationBase) {
+			if (g_config.dump_on_api_type)
+				CapeMetaData->DumpType = g_config.dump_on_api_type;
+			if (DumpRegion(AllocationBase))
+				DebugOutput("APIGuardUnpack: Dumped memory region at 0x%p.\n", AllocationBase);
+			else
+				DebugOutput("APIGuardUnpack: Failed to dump memory region at 0x%p.\n", AllocationBase);
 		}
+		else
+			DebugOutput("APIGuardUnpack: Failed to obtain current module base address.\n");
 	}
+	else
+		DebugOutput("APIGuardUnpack: No valid return address.\n");
+	//exit(0);
 }
 
-void UpdateAPIAddressesFromFile() {
-	//FILE* file = fopen("/opt/CAPEv2/output.txt", "r");
-	FILE* file = fopen("Z:\\output.txt", "r");
-	if (!file) {
-		DebugOutput("Fail to open file\n");
-		return;
-	}
-	PVOID AllocationBase = NULL;
-	AllocationBase=GetHookCallerBase();
-	
-	DebugOutput("Open file successfully\n");
-	char line[100]; // 用于存储每行内容
-	while (fgets(line, sizeof(line), file)) {
-		char apiName[50];
-		unsigned int address;
+HOOKDEF(FARPROC, WINAPI, GetProcAddress,
+    __in HMODULE hModule,
+    __in LPCSTR lpProcName
+) {
+    FARPROC ret = Old_GetProcAddress(hModule, lpProcName);
 
-		// 解析每一行内容
-		if (sscanf(line, "%[^,], 0x%X", apiName, &address) == 2) {
-			int index = getAPIIndex(apiName); // 查找 API 名的索引
-			if (index != -1) {
-				#ifdef _WIN64
-				apiArray[index].latestIAT = address; // 更新地址
-				DebugOutput("IAT Initialize finished, %s latestIAT is 0x%X\n", apiArray[index].APIname, (UINT64)AllocationBase);
-				#else
-				apiArray[index].latestIAT = address;
-				DebugOutput("IAT Initialize finished, %s latestIAT is 0x%X\n", apiArray[index].APIname, (UINT32)AllocationBase);
-				#endif
-				
-			}
-		}
+    DebugOutput("Hooked GetProcAddress: Module = %p, Function = %s, Address = %p\n", hModule, lpProcName, ret);
+	//DWORD_PTR minExeAddress = (DWORD_PTR)GetModuleHandle(NULL);
+	//DWORD_PTR maxExeAddress = minExeAddress + (DWORD_PTR)GetAllocationSize((PVOID)minExeAddress);
+
+	int index = getAPIIndexNew(lpProcName);
+	DebugOutput("GetProcAddress: %s index is %d\n", lpProcName, index);
+	if (index != -1) {
+		APIGuardArray[index].APIGuardUnpackFlag = 1;
+		DebugOutput("GetProcAddress: %s APIGuardUnpackFlag is 1\n", APIGuardArray[index].APIname);
 	}
 
-	fclose(file);
+	// if (hookinfo->main_caller_retaddr > minExeAddress && hookinfo->main_caller_retaddr < maxExeAddress && YaraDone == 1) 
+	// 	return (FARPROC)APIGuardUnpack;
+
+    return ret;
 }
 
 HOOKDEF(HANDLE, WINAPI, CreateToolhelp32Snapshot,
@@ -227,7 +190,7 @@ HOOKDEF(HANDLE, WINAPI, CreateToolhelp32Snapshot,
 
 	LOQ_handle("process", "hi", "Flags", dwFlags, "ProcessId", th32ProcessID);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("CreateToolhelp32Snapshot", hookinfo);
+	APIGuardUnpack("CreateToolhelp32Snapshot", hookinfo);
 	return ret;
 }
 
@@ -246,7 +209,7 @@ HOOKDEF(BOOL, WINAPI, Process32NextW,
 	else
 		LOQ_bool("process", "");
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("Process32NextW", hookinfo);
+	APIGuardUnpack("Process32NextW", hookinfo);
 	return ret;
 }
 
@@ -265,7 +228,7 @@ HOOKDEF(BOOL, WINAPI, Process32FirstW,
 	else
 		LOQ_bool("process", "");
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("Process32FirstW", hookinfo);
+	APIGuardUnpack("Process32FirstW", hookinfo);
 	return ret;
 }
 
@@ -280,7 +243,7 @@ HOOKDEF(BOOL, WINAPI, Module32NextW,
 	else
 		LOQ_bool("process", "");
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("Module32NextW", hookinfo);
+	APIGuardUnpack("Module32NextW", hookinfo);
 	return ret;
 }
 
@@ -295,7 +258,7 @@ HOOKDEF(BOOL, WINAPI, Module32FirstW,
 	else
 		LOQ_bool("process", "");
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("Module32FirstW", hookinfo);
+	APIGuardUnpack("Module32FirstW", hookinfo);
 	return ret;
 }
 
@@ -305,8 +268,8 @@ HOOKDEF(UINT, WINAPI, WinExec,
 ) {
 	UINT ret = Old_WinExec(lpCmdLine, uCmdShow);
 	LOQ_nonzero("process", "si", "CmdLine", lpCmdLine, "CmdShow", uCmdShow);
-	hook_info_t *hookinfo = hook_info(); // 获取当前线程的 hook_info_t 结构实例
-	DumpOnce("WinExec", hookinfo);
+	hook_info_t *hookinfo = hook_info(); 
+	APIGuardUnpack("WinExec", hookinfo);
 	return ret;
 }
 
@@ -354,7 +317,7 @@ HOOKDEF(BOOL, WINAPI, CreateProcessA,
 			"ThreadHandle", lpProcessInformation->hThread, "StackPivoted", is_stack_pivoted() ? "yes" : "no");
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("CreateProcessA", hookinfo);
+	APIGuardUnpack("CreateProcessA", hookinfo);
 	return ret;
 }
 
@@ -402,7 +365,7 @@ HOOKDEF(BOOL, WINAPI, CreateProcessW,
 			"ThreadHandle", lpProcessInformation->hThread, "StackPivoted", is_stack_pivoted() ? "yes" : "no");
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("CreateProcessW", hookinfo);
+	APIGuardUnpack("CreateProcessW", hookinfo);
 	return ret;
 }
 
@@ -427,7 +390,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtCreateProcess,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtCreateProcess", hookinfo);
+	APIGuardUnpack("NtCreateProcess", hookinfo);
 	return ret;
 }
 
@@ -453,7 +416,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtCreateProcessEx,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtCreateProcessEx", hookinfo);
+	APIGuardUnpack("NtCreateProcessEx", hookinfo);
 	return ret;
 }
 
@@ -523,7 +486,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtCreateUserProcess,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtCreateUserProcess", hookinfo);
+	APIGuardUnpack("NtCreateUserProcess", hookinfo);
 	return ret;
 }
 
@@ -560,7 +523,7 @@ HOOKDEF(NTSTATUS, WINAPI, RtlCreateUserProcess,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("RtlCreateUserProcess", hookinfo);
+	APIGuardUnpack("RtlCreateUserProcess", hookinfo);
 	return ret;
 }
 
@@ -613,7 +576,7 @@ HOOKDEF(BOOL, WINAPI, CreateProcessWithLogonW,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("CreateProcessWithLogonW", hookinfo);
+	APIGuardUnpack("CreateProcessWithLogonW", hookinfo);
 	return ret;
 }
 
@@ -674,7 +637,7 @@ HOOKDEF(BOOL, WINAPI, CreateProcessWithTokenW,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("CreateProcessWithTokenW", hookinfo);
+	APIGuardUnpack("CreateProcessWithTokenW", hookinfo);
 	return ret;
 }
 
@@ -714,7 +677,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtOpenProcess,
 	else
 		LOQ_ntstatus("process", "Phi", "ProcessHandle", ProcessHandle, "DesiredAccess", DesiredAccess, "ProcessIdentifier", pid);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtOpenProcess", hookinfo);
+	APIGuardUnpack("NtOpenProcess", hookinfo);
 	return ret;
 }
 
@@ -727,7 +690,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtOpenProcessToken,
 	ret = Old_NtOpenProcessToken(ProcessHandle, DesiredAccess, TokenHandle);
 	LOQ_ntstatus("process", "phP", "ProcessHandle", ProcessHandle, "DesiredAccess", DesiredAccess, "TokenHandle", TokenHandle);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtOpenProcessToken", hookinfo);
+	APIGuardUnpack("NtOpenProcessToken", hookinfo);
 	return ret;
 }
 
@@ -741,7 +704,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtQueryInformationToken,
 	NTSTATUS ret = Old_NtQueryInformationToken(TokenHandle, TokenInformationClass, TokenInformation, TokenInformationLength, ReturnLength);
 	LOQ_ntstatus("process", "ib", "TokenInformationClass", TokenInformationClass, "TokenInformation", TokenInformationLength, TokenInformation);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtQueryInformationToken", hookinfo);
+	APIGuardUnpack("NtQueryInformationToken", hookinfo);
 	return ret;
 }
 
@@ -756,7 +719,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtResumeProcess,
 	ret = Old_NtResumeProcess(ProcessHandle);
 	LOQ_ntstatus("process", "pl", "ProcessHandle", ProcessHandle, "ProcessId", pid);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtResumeProcess", hookinfo);
+	APIGuardUnpack("NtResumeProcess", hookinfo);
 	return ret;
 }
 
@@ -821,9 +784,9 @@ HOOKDEF(NTSTATUS, WINAPI, NtTerminateProcess,
 	}
 
 	set_lasterrors(&lasterror);
-	ret = Old_NtTerminateProcess(ProcessHandle, ExitStatus);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtTerminateProcess", hookinfo);
+	APIGuardUnpack("NtTerminateProcess", hookinfo);
+	ret = Old_NtTerminateProcess(ProcessHandle, ExitStatus);
 	return ret;
 }
 
@@ -840,7 +803,7 @@ HOOKDEF(NTSTATUS, WINAPI,  RtlReportSilentProcessExit,
 	if (ALLOW_WER)
 		ret = Old_RtlReportSilentProcessExit(ProcessHandle, ExitStatus);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("RtlReportSilentProcessExit", hookinfo);
+	APIGuardUnpack("RtlReportSilentProcessExit", hookinfo);
 	return ret;
 }
 
@@ -868,7 +831,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtCreateSection,
 
 	free(FileName);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtCreateSection", hookinfo);
+	APIGuardUnpack("NtCreateSection", hookinfo);
 	return ret;
 }
 
@@ -882,7 +845,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtOpenSection,
 	LOQ_ntstatus("process", "Ppo", "SectionHandle", SectionHandle, "DesiredAccess", DesiredAccess,
 		"ObjectAttributes", ObjectAttributes ? ObjectAttributes->ObjectName : NULL);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtOpenSection", hookinfo);
+	APIGuardUnpack("NtOpenSection", hookinfo);
 	return ret;
 }
 
@@ -899,7 +862,7 @@ HOOKDEF(BOOL, WINAPI, ShellExecuteExW,
 			"Parameters", pExecInfo->lpParameters, "Show", pExecInfo->nShow);
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("ShellExecuteExW", hookinfo);
+	APIGuardUnpack("ShellExecuteExW", hookinfo);
 	return ret;
 }
 
@@ -946,7 +909,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtMapViewOfSection,
 	if (ModuleName)
 		free(ModuleName);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtMapViewOfSection", hookinfo);
+	APIGuardUnpack("NtMapViewOfSection", hookinfo);
 	return ret;
 }
 
@@ -980,7 +943,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtMapViewOfSectionEx,
 		}
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtMapViewOfSectionEx", hookinfo);
+	APIGuardUnpack("NtMapViewOfSectionEx", hookinfo);
 	return ret;
 }
 
@@ -1005,7 +968,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtUnmapViewOfSection,
 
 	LOQ_ntstatus("process", "ppp", "ProcessHandle", ProcessHandle, "BaseAddress", BaseAddress, "RegionSize", map_size);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtUnmapViewOfSection", hookinfo);
+	APIGuardUnpack("NtUnmapViewOfSection", hookinfo);
 	return ret;
 }
 
@@ -1031,7 +994,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtUnmapViewOfSectionEx,
 
 	LOQ_ntstatus("process", "pppi", "ProcessHandle", ProcessHandle, "BaseAddress", BaseAddress, "RegionSize", map_size, "Flags", Flags);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtUnmapViewOfSectionEx", hookinfo);
+	APIGuardUnpack("NtUnmapViewOfSectionEx", hookinfo);
 	return ret;
 }
 
@@ -1043,7 +1006,7 @@ HOOKDEF(HMODULE, WINAPI, LoadLibraryExW,
 	HMODULE ret = Old_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
 	LOQ_nonnull("system", "uh", "lpLibFileName", lpLibFileName, "dwFlags", dwFlags);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("LoadLibraryExW", hookinfo);
+	APIGuardUnpack("LoadLibraryExW", hookinfo);
 	return ret;
 }
 
@@ -1068,7 +1031,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtAllocateVirtualMemory,
 	LOQ_ntstatus("process", "pPPhs", "ProcessHandle", ProcessHandle, "BaseAddress", BaseAddress,
 		"RegionSize", RegionSize, "Protection", Protect, "StackPivoted", is_stack_pivoted() ? "yes" : "no");
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtAllocateVirtualMemory", hookinfo);
+	APIGuardUnpack("NtAllocateVirtualMemory", hookinfo);
 	return ret;
 }
 
@@ -1094,7 +1057,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtAllocateVirtualMemoryEx,
 	LOQ_ntstatus("process", "pPPhs", "ProcessHandle", ProcessHandle, "BaseAddress", BaseAddress,
 		"RegionSize", RegionSize, "Protection", PageProtection, "StackPivoted", is_stack_pivoted() ? "yes" : "no");
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtAllocateVirtualMemoryEx", hookinfo);
+	APIGuardUnpack("NtAllocateVirtualMemoryEx", hookinfo);
 	return ret;
 }
 
@@ -1130,6 +1093,10 @@ HOOKDEF(NTSTATUS, WINAPI, NtReadVirtualMemory,
 			"Buffer", NumberOfBytesRead, Buffer
 		);
 	}
+
+	LOQ_ntstatus("process", "pphB", "ProcessHandle", ProcessHandle, "BaseAddress", BaseAddress, "Size", NumberOfBytesToRead, "Buffer", NumberOfBytesRead, Buffer);
+	hook_info_t *hookinfo = hook_info();
+	APIGuardUnpack("NtReadVirtualMemory", hookinfo);
 
 	return ret;
 }
@@ -1168,6 +1135,10 @@ HOOKDEF(BOOL, WINAPI, ReadProcessMemory,
 			"ProcessId", pid
 		);
 	}
+
+	LOQ_bool("process", "pphB", "ProcessHandle", hProcess, "BaseAddress", lpBaseAddress, "Size", nSize, "Buffer", lpNumberOfBytesRead, lpBuffer);
+	hook_info_t *hookinfo = hook_info();
+	APIGuardUnpack("ReadProcessMemory", hookinfo);
 
 	return ret;
 }
@@ -1218,7 +1189,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtWriteVirtualMemory,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtWriteVirtualMemory", hookinfo);
+	APIGuardUnpack("NtWriteVirtualMemory", hookinfo);
 	return ret;
 }
 
@@ -1267,7 +1238,7 @@ HOOKDEF(BOOL, WINAPI, WriteProcessMemory,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("WriteProcessMemory", hookinfo);
+	APIGuardUnpack("WriteProcessMemory", hookinfo);
 	return ret;
 }
 
@@ -1289,7 +1260,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtWow64ReadVirtualMemory64,
 	LOQ_ntstatus("process", "pxb", "ProcessHandle", ProcessHandle, "BaseAddress", BaseAddress,
 		"Buffer", NumberOfBytesRead->LowPart, Buffer);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtWow64ReadVirtualMemory64", hookinfo);
+	APIGuardUnpack("NtWow64ReadVirtualMemory64", hookinfo);
 	return ret;
 }
 
@@ -1319,7 +1290,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtWow64WriteVirtualMemory64,
 		disable_sleep_skip();
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtWow64WriteVirtualMemory64", hookinfo);
+	APIGuardUnpack("NtWow64WriteVirtualMemory64", hookinfo);
 	return ret;
 }
 
@@ -1405,7 +1376,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtProtectVirtualMemory,
 	if (ModuleName)
 		free(ModuleName);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtProtectVirtualMemory", hookinfo);
+	APIGuardUnpack("NtProtectVirtualMemory", hookinfo);
 	return ret;
 }
 
@@ -1484,7 +1455,7 @@ HOOKDEF(BOOL, WINAPI, VirtualProtectEx,
 	if (ModuleName)
 		free(ModuleName);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("VirtualProtectEx", hookinfo);
+	APIGuardUnpack("VirtualProtectEx", hookinfo);
 	return ret;
 }
 
@@ -1503,7 +1474,7 @@ HOOKDEF(NTSTATUS, WINAPI, NtFreeVirtualMemory,
 	LOQ_ntstatus("process", "pPPh", "ProcessHandle", ProcessHandle, "BaseAddress", BaseAddress,
 		"RegionSize", RegionSize, "FreeType", FreeType);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("NtFreeVirtualMemory", hookinfo);
+	APIGuardUnpack("NtFreeVirtualMemory", hookinfo);
 	return ret;
 }
 
@@ -1516,8 +1487,6 @@ HOOKDEF(BOOL, WINAPI, VirtualFreeEx,
 	BOOL ret = Old_VirtualFreeEx(hProcess, lpAddress, dwSize, dwFreeType);
 	LOQ_bool("process", "ppph", "ProcessHandle", hProcess, "Address", lpAddress,
 		"Size", dwSize, "FreeType", dwFreeType);
-	hook_info_t *hookinfo = hook_info();
-	DumpOnce("VirtualFreeEx", hookinfo);
 	return ret;
 }
 
@@ -1527,7 +1496,7 @@ HOOKDEF(int, CDECL, system,
 	int ret = Old_system(command);
 	LOQ_nonnegone("process", "s", "Command", command);
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("system", hookinfo);
+	APIGuardUnpack("system", hookinfo);
 	return ret;
 }
 
@@ -1550,7 +1519,7 @@ HOOKDEF(BOOL, WINAPI, WaitForDebugEvent,
 		LOQ_bool("process", "iii", "EventCode", lpDebugEvent->dwDebugEventCode, "ProcessId", lpDebugEvent->dwProcessId, "ThreadId", lpDebugEvent->dwThreadId);
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("WaitForDebugEvent", hookinfo);
+	APIGuardUnpack("WaitForDebugEvent", hookinfo);
 	return ret;
 }
 
@@ -1580,7 +1549,7 @@ HOOKDEF(NTSTATUS, WINAPI, DbgUiWaitStateChange,
 		}
 	}
 	hook_info_t *hookinfo = hook_info();
-	DumpOnce("DbgUiWaitStateChange", hookinfo);
+	APIGuardUnpack("DbgUiWaitStateChange", hookinfo);
 	return ret;
 }
 
